@@ -2,15 +2,16 @@ package exoscale
 
 import (
 	"context"
+	b64 "encoding/base64"
 	"errors"
 	"fmt"
-	"log"
-	"time"
-
 	egoscale "github.com/exoscale/egoscale/v2"
 	exoapi "github.com/exoscale/egoscale/v2/api"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/diag"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+	"k8s.io/client-go/tools/clientcmd"
+	"log"
+	"time"
 )
 
 const (
@@ -27,6 +28,9 @@ const (
 	resSKSClusterAttrDescription        = "description"
 	resSKSClusterAttrEndpoint           = "endpoint"
 	resSKSClusterAttrKubeconfig         = "kubeconfig"
+	resSKSClusterAttrCA                 = "ca_certificate"
+	resSKSClusterAttrClientCert         = "client_certificate"
+	resSKSClusterAttrClientKey          = "client_key"
 	resSKSClusterAttrExoscaleCCM        = "exoscale_ccm"
 	resSKSClusterAttrLabels             = "labels"
 	resSKSClusterAttrMetricsServer      = "metrics_server"
@@ -82,6 +86,21 @@ func resourceSKSCluster() *schema.Resource {
 			Computed: true,
 		},
 		resSKSClusterAttrKubeconfig: {
+			Type:      schema.TypeString,
+			Computed:  true,
+			Sensitive: true,
+		},
+		resSKSClusterAttrCA: {
+			Type:      schema.TypeString,
+			Computed:  true,
+			Sensitive: true,
+		},
+		resSKSClusterAttrClientCert: {
+			Type:      schema.TypeString,
+			Computed:  true,
+			Sensitive: true,
+		},
+		resSKSClusterAttrClientKey: {
 			Type:      schema.TypeString,
 			Computed:  true,
 			Sensitive: true,
@@ -340,18 +359,55 @@ func resourceSKSClusterRead(ctx context.Context, d *schema.ResourceData, meta in
 		return diag.FromErr(err)
 	}
 
-	sksKubeconfig, err := client.GetSKSClusterKubeconfig(
+	const username = "kube-admin"
+
+	sksKubeconfigB64, err := client.GetSKSClusterKubeconfig(
 		ctx,
 		zone,
 		sksCluster,
-		"kube-admin",
+		username,
 		[]string{"system:masters"},
 		30*24*time.Hour,
 	)
+	if err != nil {
+		return diag.FromErr(err)
+	}
+
+	sksKubeconfigYaml, err := b64.StdEncoding.DecodeString(sksKubeconfigB64)
+	if err != nil {
+		return diag.FromErr(err)
+	}
+
+	sksKubeconfig, err := clientcmd.Load(sksKubeconfigYaml)
+	if err != nil {
+		return diag.FromErr(err)
+	}
+
+	if err := d.Set(resSKSClusterAttrKubeconfig, string(sksKubeconfigYaml)); err != nil {
+		return diag.FromErr(err)
+	}
+
+	certificateAuthorityData := sksKubeconfig.Clusters[d.Id()].CertificateAuthorityData
+
+	if err := d.Set(resSKSClusterAttrCA, string(certificateAuthorityData)); err != nil {
+		return diag.FromErr(err)
+	}
+
+	clientCertificateData := sksKubeconfig.AuthInfos[username].ClientCertificateData
+
+	if err := d.Set(resSKSClusterAttrClientCert, string(clientCertificateData)); err != nil {
+		return diag.FromErr(err)
+	}
+
+	clientKeyData := sksKubeconfig.AuthInfos[username].ClientKeyData
+
+	if err := d.Set(resSKSClusterAttrClientKey, string(clientKeyData)); err != nil {
+		return diag.FromErr(err)
+	}
 
 	log.Printf("[DEBUG] %s: read finished successfully", resourceSKSClusterIDString(d))
 
-	return diag.FromErr(resourceSKSClusterApply(ctx, d, sksCluster, sksKubeconfig))
+	return diag.FromErr(resourceSKSClusterApply(ctx, d, sksCluster))
 }
 
 func resourceSKSClusterUpdate(ctx context.Context, d *schema.ResourceData, meta interface{}) diag.Diagnostics {
@@ -432,7 +488,7 @@ func resourceSKSClusterDelete(ctx context.Context, d *schema.ResourceData, meta 
 	return nil
 }
 
-func resourceSKSClusterApply(_ context.Context, d *schema.ResourceData, sksCluster *egoscale.SKSCluster, sksKubeconfig string) error {
+func resourceSKSClusterApply(_ context.Context, d *schema.ResourceData, sksCluster *egoscale.SKSCluster) error {
 	if sksCluster.AddOns != nil {
 		if err := d.Set(resSKSClusterAttrAddons, *sksCluster.AddOns); err != nil {
 			return err
@@ -464,10 +520,6 @@ func resourceSKSClusterApply(_ context.Context, d *schema.ResourceData, sksClust
 	}
 
 	if err := d.Set(resSKSClusterAttrEndpoint, *sksCluster.Endpoint); err != nil {
-		return err
-	}
-
-	if err := d.Set(resSKSClusterAttrKubeconfig, sksKubeconfig); err != nil {
 		return err
 	}
 
