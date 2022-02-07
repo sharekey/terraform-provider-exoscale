@@ -2,6 +2,7 @@ module github.com/exoscale/terraform-provider-exoscale
 
 require (
 	cloud.google.com/go v0.99.0 // indirect
+	github.com/Masterminds/semver/v3 v3.1.1
 	github.com/Microsoft/go-winio v0.5.1 // indirect
 	github.com/apparentlymart/go-cidr v1.1.0 // indirect
 	github.com/aws/aws-sdk-go v1.40.38 // indirect

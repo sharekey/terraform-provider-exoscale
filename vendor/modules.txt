@@ -1,5 +1,8 @@
 # cloud.google.com/go v0.99.0
 ## explicit
+# github.com/Masterminds/semver/v3 v3.1.1
+## explicit
+github.com/Masterminds/semver/v3
 # github.com/Microsoft/go-winio v0.5.1
 ## explicit
 # github.com/agext/levenshtein v1.2.2

@@ -21,32 +21,33 @@ const (
 	sksClusterAddonExoscaleCCM = "exoscale-cloud-controller"
 	sksClusterAddonMS          = "metrics-server"
 
-	resSKSClusterAttrAddons             = "addons"
-	resSKSClusterAttrAutoUpgrade        = "auto_upgrade"
-	resSKSClusterAttrCNI                = "cni"
-	resSKSClusterAttrCreatedAt          = "created_at"
-	resSKSClusterAttrDescription        = "description"
-	resSKSClusterAttrEndpoint           = "endpoint"
-	resSKSClusterAttrKubeconfig         = "kubeconfig"
-	resSKSClusterAttrCA                 = "ca_certificate"
-	resSKSClusterAttrClientCert         = "client_certificate"
-	resSKSClusterAttrClientKey          = "client_key"
-	resSKSClusterAttrExoscaleCCM        = "exoscale_ccm"
-	resSKSClusterAttrLabels             = "labels"
-	resSKSClusterAttrMetricsServer      = "metrics_server"
-	resSKSClusterAttrName               = "name"
-	resSKSClusterAttrNodepools          = "nodepools"
-	resSKSClusterAttrOIDCClientID       = "client_id"
-	resSKSClusterAttrOIDCGroupsClaim    = "groups_claim"
-	resSKSClusterAttrOIDCGroupsPrefix   = "groups_prefix"
-	resSKSClusterAttrOIDCIssuerURL      = "issuer_url"
-	resSKSClusterAttrOIDCRequiredClaim  = "required_claim"
-	resSKSClusterAttrOIDCUsernameClaim  = "username_claim"
-	resSKSClusterAttrOIDCUsernamePrefix = "username_prefix"
-	resSKSClusterAttrServiceLevel       = "service_level"
-	resSKSClusterAttrState              = "state"
-	resSKSClusterAttrVersion            = "version"
-	resSKSClusterAttrZone               = "zone"
+	resSKSClusterAttrAddons              = "addons"
+	resSKSClusterAttrAutoUpgrade         = "auto_upgrade"
+	resSKSClusterAttrCNI                 = "cni"
+	resSKSClusterAttrCreatedAt           = "created_at"
+	resSKSClusterAttrDescription         = "description"
+	resSKSClusterAttrEndpoint            = "endpoint"
+	resSKSClusterAttrKubeconfigCreatedAt = "kubeconfig_created_at"
+	resSKSClusterAttrKubeconfig          = "kubeconfig"
+	resSKSClusterAttrCA                  = "ca_certificate"
+	resSKSClusterAttrClientCert          = "client_certificate"
+	resSKSClusterAttrClientKey           = "client_key"
+	resSKSClusterAttrExoscaleCCM         = "exoscale_ccm"
+	resSKSClusterAttrLabels              = "labels"
+	resSKSClusterAttrMetricsServer       = "metrics_server"
+	resSKSClusterAttrName                = "name"
+	resSKSClusterAttrNodepools           = "nodepools"
+	resSKSClusterAttrOIDCClientID        = "client_id"
+	resSKSClusterAttrOIDCGroupsClaim     = "groups_claim"
+	resSKSClusterAttrOIDCGroupsPrefix    = "groups_prefix"
+	resSKSClusterAttrOIDCIssuerURL       = "issuer_url"
+	resSKSClusterAttrOIDCRequiredClaim   = "required_claim"
+	resSKSClusterAttrOIDCUsernameClaim   = "username_claim"
+	resSKSClusterAttrOIDCUsernamePrefix  = "username_prefix"
+	resSKSClusterAttrServiceLevel        = "service_level"
+	resSKSClusterAttrState               = "state"
+	resSKSClusterAttrVersion             = "version"
+	resSKSClusterAttrZone                = "zone"
 )
 
 func resourceSKSClusterIDString(d resourceIDStringer) string {
@@ -89,6 +90,10 @@ func resourceSKSCluster() *schema.Resource {
 			Type:      schema.TypeString,
 			Computed:  true,
 			Sensitive: true,
+		},
+		resSKSClusterAttrKubeconfigCreatedAt: {
+			Type:     schema.TypeString,
+			Computed: true,
 		},
 		resSKSClusterAttrCA: {
 			Type:      schema.TypeString,
@@ -359,50 +364,74 @@ func resourceSKSClusterRead(ctx context.Context, d *schema.ResourceData, meta in
 		return diag.FromErr(err)
 	}
 
+	const kubeconfigTTL = 30 * 24 * time.Hour
 	const username = "kube-admin"
+	const createdAtLayout = "2006-01-02 15:04:05.999999999 -0700 MST"
 
-	sksKubeconfigB64, err := client.GetSKSClusterKubeconfig(
-		ctx,
-		zone,
-		sksCluster,
-		username,
-		[]string{"system:masters"},
-		30*24*time.Hour,
-	)
-	if err != nil {
-		return diag.FromErr(err)
+	kubeconfigCreatedAtString := d.Get(resSKSClusterAttrKubeconfigCreatedAt).(string)
+
+	var kubeconfigCreatedAt time.Time
+
+	if len(kubeconfigCreatedAtString) > 0 {
+		kubeconfigCreatedAt, err = time.Parse(createdAtLayout, kubeconfigCreatedAtString)
+		if err != nil {
+			return diag.FromErr(err)
+		}
 	}
 
-	sksKubeconfigYaml, err := b64.StdEncoding.DecodeString(sksKubeconfigB64)
-	if err != nil {
-		return diag.FromErr(err)
-	}
+	needReissueKubeconfig := len(kubeconfigCreatedAtString) == 0 || kubeconfigCreatedAt.IsZero() || kubeconfigCreatedAt.Sub(time.Now()) > kubeconfigTTL
 
-	sksKubeconfig, err := clientcmd.Load(sksKubeconfigYaml)
-	if err != nil {
-		return diag.FromErr(err)
-	}
+	if needReissueKubeconfig {
+		sksKubeconfigB64, err := client.GetSKSClusterKubeconfig(
+			ctx,
+			zone,
+			sksCluster,
+			username,
+			[]string{"system:masters"},
+			30*24*time.Hour,
+		)
+		if err != nil {
+			return diag.FromErr(err)
+		}
 
-	if err := d.Set(resSKSClusterAttrKubeconfig, string(sksKubeconfigYaml)); err != nil {
-		return diag.FromErr(err)
-	}
+		sksKubeconfigYaml, err := b64.StdEncoding.DecodeString(sksKubeconfigB64)
+		if err != nil {
+			return diag.FromErr(err)
+		}
 
-	certificateAuthorityData := sksKubeconfig.Clusters[d.Id()].CertificateAuthorityData
+		sksKubeconfig, err := clientcmd.Load(sksKubeconfigYaml)
+		if err != nil {
+			return diag.FromErr(err)
+		}
 
-	if err := d.Set(resSKSClusterAttrCA, string(certificateAuthorityData)); err != nil {
-		return diag.FromErr(err)
-	}
+		if err := d.Set(resSKSClusterAttrKubeconfig, string(sksKubeconfigYaml)); err != nil {
+			return diag.FromErr(err)
+		}
 
-	clientCertificateData := sksKubeconfig.AuthInfos[username].ClientCertificateData
+		certificateAuthorityData := sksKubeconfig.Clusters[d.Id()].CertificateAuthorityData
 
-	if err := d.Set(resSKSClusterAttrClientCert, string(clientCertificateData)); err != nil {
-		return diag.FromErr(err)
-	}
+		if err := d.Set(resSKSClusterAttrCA, string(certificateAuthorityData)); err != nil {
+			return diag.FromErr(err)
+		}
 
-	clientKeyData := sksKubeconfig.AuthInfos[username].ClientKeyData
+		clientCertificateData := sksKubeconfig.AuthInfos[username].ClientCertificateData
 
-	if err := d.Set(resSKSClusterAttrClientKey, string(clientKeyData)); err != nil {
-		return diag.FromErr(err)
+		if err := d.Set(resSKSClusterAttrClientCert, string(clientCertificateData)); err != nil {
+			return diag.FromErr(err)
+		}
+
+		clientKeyData := sksKubeconfig.AuthInfos[username].ClientKeyData
+
+		if err := d.Set(resSKSClusterAttrClientKey, string(clientKeyData)); err != nil {
+			return diag.FromErr(err)
+		}
+
+		kubeconfigCreatedAt = time.Now()
+
+		if err := d.Set(resSKSClusterAttrKubeconfigCreatedAt, kubeconfigCreatedAt.Format(createdAtLayout)); err != nil {
+			return diag.FromErr(err)
+		}
+
 	}
 
 	log.Printf("[DEBUG] %s: read finished successfully", resourceSKSClusterIDString(d))

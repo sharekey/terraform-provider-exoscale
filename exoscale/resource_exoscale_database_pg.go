@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	semver "github.com/Masterminds/semver/v3"
 	"net/http"
+	"strconv"
 
 	egoscale "github.com/exoscale/egoscale/v2"
 	"github.com/exoscale/egoscale/v2/oapi"
@@ -19,6 +21,7 @@ const (
 	resDatabaseAttrPgIPFilter        = "ip_filter"
 	resDatabaseAttrPgSettings        = "pg_settings"
 	resDatabaseAttrPgVersion         = "version"
+	resDatabaseAttrPgActualVersion   = "actual_version"
 	resDatabaseAttrPgbouncerSettings = "pgbouncer_settings"
 	resDatabaseAttrPglookoutSettings = "pglookout_settings"
 )
@@ -58,6 +61,11 @@ var resDatabasePgSchema = &schema.Schema{
 				Computed: true,
 			},
 			resDatabaseAttrPgVersion: {
+				Type:     schema.TypeString,
+				Optional: true,
+				Computed: true,
+			},
+			resDatabaseAttrPgActualVersion: {
 				Type:     schema.TypeString,
 				Optional: true,
 				Computed: true,
@@ -410,7 +418,12 @@ func resourceDatabaseApplyPg(ctx context.Context, d *schema.ResourceData, client
 	}
 
 	if v := databaseService.Version; v != nil {
-		pg[resDatabaseAttrPgVersion] = *v
+		pg[resDatabaseAttrPgActualVersion] = *v
+	}
+
+	if v := databaseService.Version; v != nil {
+		version, _ := semver.NewVersion(*v)
+		pg[resDatabaseAttrPgVersion] = strconv.FormatUint(version.Major(), 10)
 	}
 
 	if v := databaseService.PgbouncerSettings; v != nil {
