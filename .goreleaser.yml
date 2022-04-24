@@ -37,7 +37,7 @@ signs:
 
 release:
   github:
-    owner: exoscale
+    owner: sharekey
     name: terraform-provider-exoscale
 
 changelog:
